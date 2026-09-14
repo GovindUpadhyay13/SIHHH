@@ -138,6 +138,30 @@ body {
   gap: 10px;
 }
 
+.view-mode-toggle {
+  display: flex;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.btn-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-toggle.active {
+  background: var(--accent-cyan);
+  color: #0b0f19;
+}
+
 .btn-ctrl {
   background: var(--bg-card);
   border: 1px solid var(--border-card);

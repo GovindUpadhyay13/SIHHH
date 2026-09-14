@@ -23,6 +23,7 @@ function worldToCanvas(x, y) {
 // Simulation State
 const simState = {
   isRunning: true,
+  viewMode: "2D", // "2D" or "3D"
   currentTrip: 1,
   activeRoute: "seg_main_arterial", // or "seg_bypass"
   weather: "CLEAR", // CLEAR, LIGHT_RAIN, HEAVY_RAIN
@@ -647,6 +648,250 @@ function render() {
   ctx.restore();
 }
 
+// 3D Perspective Behind-The-Vehicle (CARLA Chase Camera) View Renderer
+function render3D() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const horizonY = 190;
+  const vpX = canvas.width / 2;
+  const vpY = horizonY;
+  const v = simState.veh;
+
+  // 1. Sky & Horizon Atmospheric Gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY);
+  skyGrad.addColorStop(0, "#060913");
+  skyGrad.addColorStop(0.7, "#0f172a");
+  skyGrad.addColorStop(1, "#1e293b");
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, canvas.width, horizonY);
+
+  // Distant horizon mountain silhouette
+  ctx.fillStyle = "#0c1222";
+  ctx.beginPath();
+  ctx.moveTo(0, horizonY);
+  for (let x = 0; x <= canvas.width; x += 40) {
+    const h = Math.sin(x * 0.015) * 20 + Math.cos(x * 0.03) * 12;
+    ctx.lineTo(x, horizonY - 15 - Math.abs(h));
+  }
+  ctx.lineTo(canvas.width, horizonY);
+  ctx.closePath();
+  ctx.fill();
+
+  // 2. 3D Ground (Off-road dirt/grass)
+  const groundGrad = ctx.createLinearGradient(0, horizonY, 0, canvas.height);
+  groundGrad.addColorStop(0, "#131a2a");
+  groundGrad.addColorStop(1, "#090d16");
+  ctx.fillStyle = groundGrad;
+  ctx.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
+
+  // 3. 3D Road Perspective Quad
+  const roadTopW = 80;
+  const roadBotW = 740;
+
+  ctx.fillStyle = "#1e2433";
+  ctx.beginPath();
+  ctx.moveTo(vpX - roadTopW / 2, horizonY);
+  ctx.lineTo(vpX + roadTopW / 2, horizonY);
+  ctx.lineTo(vpX + roadBotW / 2, canvas.height);
+  ctx.lineTo(vpX - roadBotW / 2, canvas.height);
+  ctx.closePath();
+  ctx.fill();
+
+  // Road curbs / edges (Cyan glowing for bypass, asphalt yellow for arterial)
+  const isBypass = simState.activeRoute === "seg_bypass";
+  ctx.strokeStyle = isBypass ? "#00f0ff" : "rgba(245, 158, 11, 0.6)";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(vpX - roadTopW / 2, horizonY);
+  ctx.lineTo(vpX - roadBotW / 2, canvas.height);
+  ctx.moveTo(vpX + roadTopW / 2, horizonY);
+  ctx.lineTo(vpX + roadBotW / 2, canvas.height);
+  ctx.stroke();
+
+  // Moving Centerline Dashes (Velocity-driven animation)
+  ctx.strokeStyle = "#f8fafc";
+  ctx.lineWidth = 3;
+  const offsetPhase = (v.s * 14.0) % 60;
+  for (let d = 0; d < 12; d++) {
+    const tStart = Math.min(1.0, (d * 50 + offsetPhase) / 600);
+    const tEnd = Math.min(1.0, (d * 50 + 25 + offsetPhase) / 600);
+    if (tStart < 0.05) continue;
+
+    const y1 = horizonY + (canvas.height - horizonY) * (tStart ** 2.2);
+    const y2 = horizonY + (canvas.height - horizonY) * (tEnd ** 2.2);
+    ctx.beginPath();
+    ctx.moveTo(vpX, y1);
+    ctx.lineTo(vpX, y2);
+    ctx.stroke();
+  }
+
+  // 4. 3D Forward Sensor Cone projected on road
+  const coneGrad = ctx.createRadialGradient(vpX, 420, 20, vpX, 260, 220);
+  coneGrad.addColorStop(0, "rgba(0, 240, 255, 0.35)");
+  coneGrad.addColorStop(1, "rgba(0, 240, 255, 0.0)");
+  ctx.fillStyle = coneGrad;
+  ctx.beginPath();
+  ctx.moveTo(vpX - 40, 470);
+  ctx.lineTo(vpX - 160, 260);
+  ctx.lineTo(vpX + 160, 260);
+  ctx.lineTo(vpX + 40, 470);
+  ctx.closePath();
+  ctx.fill();
+
+  // 5. Draw 3D Potholes along the road ahead
+  if (!isBypass) {
+    simState.potholes.forEach(p => {
+      const dz = p.x - v.x;
+      if (dz > 1.5 && dz < 75.0) {
+        const normZ = 1.0 - (dz / 75.0);
+        const py = horizonY + (canvas.height - horizonY) * (normZ ** 2.0);
+        const roadSpread = roadTopW + (roadBotW - roadTopW) * (normZ ** 2.0);
+        const px = vpX + (p.y - v.lateralOffsetM) * (roadSpread / 5.0);
+        const scale = Math.max(4, 38 * normZ);
+
+        // Crater shadow
+        ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+        ctx.beginPath();
+        ctx.ellipse(px, py + 2, scale * 1.2, scale * 0.45, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pothole hole
+        ctx.fillStyle = p.detected ? "#e11d48" : "#881337";
+        ctx.beginPath();
+        ctx.ellipse(px, py, scale, scale * 0.38, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Glowing hazard warning ring
+        ctx.strokeStyle = p.detected ? "#f43f5e" : "rgba(244, 63, 94, 0.4)";
+        ctx.lineWidth = p.detected ? 3 : 1.5;
+        ctx.stroke();
+
+        // Label
+        if (dz < 40.0) {
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "10px 'JetBrains Mono'";
+          ctx.fillText(`POTHOLE (${dz.toFixed(0)}m)`, px - 35, py - scale * 0.6);
+        }
+      }
+    });
+  }
+
+  // 6. Draw 3D Pedestrian Crowd in Market Zone
+  if (!isBypass) {
+    const crowdDz = simState.crowdCluster.s - v.x;
+    if (crowdDz > -5.0 && crowdDz < 80.0) {
+      const normZ = Math.max(0.05, 1.0 - (crowdDz / 80.0));
+      const py = horizonY + (canvas.height - horizonY) * (normZ ** 2.0);
+      const roadSpread = roadTopW + (roadBotW - roadTopW) * (normZ ** 2.0);
+
+      // Draw pedestrian crowd group on right roadside
+      const cx = vpX + roadSpread * 0.48;
+      const count = simState.crowdCluster.active ? 16 : 6;
+      for (let i = 0; i < count; i++) {
+        const pedX = cx + ((i % 4) - 2) * 14 * normZ;
+        const pedY = py + Math.floor(i / 4) * 8 * normZ;
+        const pedH = 32 * normZ;
+
+        // Pedestrian body
+        ctx.fillStyle = simState.crowdCluster.active ? "#f59e0b" : "#94a3b8";
+        ctx.beginPath();
+        ctx.arc(pedX, pedY - pedH, 4 * normZ, 0, Math.PI * 2); // Head
+        ctx.fill();
+        ctx.fillRect(pedX - 3 * normZ, pedY - pedH + 4 * normZ, 6 * normZ, pedH * 0.7); // Torso
+      }
+    }
+  }
+
+  // 7. Draw 3D Ego Vehicle (Chase Cam - Foreground)
+  const carY = 440;
+  const carX = vpX + v.lateralOffsetM * 18.0;
+  const rollAngle = -(v.lateralOffsetM / 1.5) * 0.08;
+
+  ctx.save();
+  ctx.translate(carX, carY);
+  ctx.rotate(rollAngle);
+
+  // Vehicle ground shadow
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.beginPath();
+  ctx.ellipse(0, 48, 110, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Rear Wheels
+  ctx.fillStyle = "#0f172a";
+  ctx.fillRect(-95, 20, 24, 32);
+  ctx.fillRect(71, 20, 24, 32);
+
+  // Main Vehicle Rear Body
+  ctx.fillStyle = "#0284c7";
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(-88, -25, 176, 68, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  // Roof & Rear Windshield
+  ctx.fillStyle = "#0b1220";
+  ctx.beginPath();
+  ctx.roundRect(-64, -65, 128, 48, 10);
+  ctx.fill();
+  ctx.strokeStyle = "#0284c7";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Glowing Red LED Taillights
+  ctx.fillStyle = "#ef4444";
+  ctx.shadowColor = "#ef4444";
+  ctx.shadowBlur = 15;
+  ctx.beginPath();
+  ctx.roundRect(-80, -12, 42, 12, 4);
+  ctx.roundRect(38, -12, 42, 12, 4);
+  ctx.fill();
+  ctx.shadowBlur = 0; // Reset shadow
+
+  // License Plate
+  ctx.fillStyle = "#fef08a";
+  ctx.fillRect(-26, 16, 52, 18);
+  ctx.fillStyle = "#000000";
+  ctx.font = "bold 9px 'JetBrains Mono'";
+  ctx.fillText("IND-AV-26", -22, 29);
+
+  ctx.restore();
+
+  // 3D HUD Overlay info (Bottom Left of 3D view)
+  ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+  ctx.strokeStyle = "rgba(0, 240, 255, 0.4)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(16, 16, 260, 68, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#00f0ff";
+  ctx.font = "bold 11px Outfit";
+  ctx.fillText("CARLA 3D CHASE CAM PERSPECTIVE", 28, 35);
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "10px 'JetBrains Mono'";
+  ctx.fillText(`Camera: Behind Ego-Vehicle (z=-6.0m, h=2.5m)`, 28, 52);
+  ctx.fillText(`Route: ${simState.activeRoute} | Pos: ${v.x.toFixed(1)}m`, 28, 68);
+}
+
+// View Mode Toggle Listeners
+document.getElementById("btn-view-2d").addEventListener("click", () => {
+  simState.viewMode = "2D";
+  document.getElementById("btn-view-2d").classList.add("active");
+  document.getElementById("btn-view-3d").classList.remove("active");
+  logEvent("system", "View switched to 2D Top-Down Kinematic Map.");
+});
+
+document.getElementById("btn-view-3d").addEventListener("click", () => {
+  simState.viewMode = "3D";
+  document.getElementById("btn-view-3d").classList.add("active");
+  document.getElementById("btn-view-2d").classList.remove("active");
+  logEvent("system", "View switched to CARLA 3D Behind-The-Vehicle Perspective Cam!");
+});
+
 // Main 60 FPS Animation Loop
 let lastTime = performance.now();
 function gameLoop(now) {
@@ -654,7 +899,11 @@ function gameLoop(now) {
   lastTime = now;
 
   updateSimulation(dt);
-  render();
+  if (simState.viewMode === "3D") {
+    render3D();
+  } else {
+    render();
+  }
 
   requestAnimationFrame(gameLoop);
 }
@@ -662,3 +911,4 @@ function gameLoop(now) {
 // Start simulation visualizer
 requestAnimationFrame(gameLoop);
 logEvent("system", "Visual engine running at 60 FPS. Click 'Run Trip 1' to start!");
+
