@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AV Sim — Adaptive Path Planning on Unstructured Indian Roads</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header Navigation -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="brand-badge">PROTOTYPE</div>
+        <div class="brand-title">
+          <span class="highlight">AutoDrive</span> Indian Roads Simulation
+        </div>
+        <div class="brand-subtitle">Adaptive Path Planning & Multi-Hazard Speed Arbitration</div>
+      </div>
+      
+      <div class="status-chips">
+        <div class="chip" id="chip-mode"><span class="dot live"></span> MOCK SIMULATION</div>
+        <div class="chip" id="chip-weather">WEATHER: CLEAR</div>
+        <div class="chip" id="chip-memory">ROAD MEMORY: 0 HAZARDS</div>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="sim-layout">
+      <!-- Left: Simulation Canvas -->
+      <section class="canvas-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
+            Live Kinematic Top-Down Simulation (Indian Road Network)
+          </div>
+          <div class="view-controls">
+            <button id="btn-pause" class="btn-ctrl">Pause</button>
+            <button id="btn-reset" class="btn-ctrl">Reset</button>
+            <span class="sim-speed">Rate: 1.0x</span>
+          </div>
+        </div>
+
+        <div class="canvas-wrapper">
+          <canvas id="simCanvas" width="920" height="520"></canvas>
+          <div id="rainOverlay" class="rain-overlay"></div>
+          
+          <!-- In-canvas mini legends -->
+          <div class="canvas-legend">
+            <div class="legend-item"><span class="legend-box direct"></span> Main Arterial (Potholes & Bazaar)</div>
+            <div class="legend-item"><span class="legend-box bypass"></span> Ring Bypass Route (Clean)</div>
+            <div class="legend-item"><span class="legend-circle pothole"></span> Pothole (Detected / Ground Truth)</div>
+            <div class="legend-item"><span class="legend-circle crowd"></span> Pedestrian Crowd Zone</div>
+          </div>
+        </div>
+
+        <!-- Simulation Interactive Scenario Trigger Bar -->
+        <div class="scenario-actions">
+          <button id="btn-trip1" class="btn-scenario primary">
+            <span class="icon">&#9658;</span>
+            <div class="btn-text">
+              <strong>SP1: Run Trip 1 (Exploration)</strong>
+              <small>Drives arterial, avoids 3 potholes, saves to SQLite</small>
+            </div>
+          </button>
+
+          <button id="btn-trip2" class="btn-scenario secondary">
+            <span class="icon">&#8635;</span>
+            <div class="btn-text">
+              <strong>SP1: Run Trip 2 (Memory Re-plan)</strong>
+              <small>Loads risk (2.50 > 1.20) & selects Bypass</small>
+            </div>
+          </button>
+
+          <button id="btn-crowd-surge" class="btn-scenario warning">
+            <span class="icon">&#128101;</span>
+            <div class="btn-text">
+              <strong>SP2: Crowd Surge</strong>
+              <small>Injects dense pedestrian bazaar zone</small>
+            </div>
+          </button>
+
+          <div class="weather-selector">
+            <label>SP3 Weather:</label>
+            <select id="weatherSelect">
+              <option value="CLEAR">Clear Sky</option>
+              <option value="LIGHT_RAIN">Light Rain (80% Speed)</option>
+              <option value="HEAVY_RAIN">Heavy Downpour (50% Speed)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Telemetry & Multi-Hazard Arbitration HUD -->
+      <aside class="telemetry-panel">
+        <!-- Telemetry Gauges -->
+        <div class="telemetry-card speed-card">
+          <div class="gauge-header">
+            <span>VEHICLE SPEED</span>
+            <span id="txt-active-limiter" class="badge-limiter">CRUISING</span>
+          </div>
+          <div class="gauge-display">
+            <div class="speed-value"><span id="txt-speed">0.0</span> <small>KM/H</small></div>
+            <div class="speed-target">Target: <strong id="txt-target-speed">40.0</strong> km/h</div>
+          </div>
+          <div class="speed-bar-container">
+            <div id="speedBar" class="speed-bar" style="width: 0%;"></div>
+            <div id="targetMarker" class="target-marker" style="left: 80%;"></div>
+          </div>
+        </div>
+
+        <!-- Multi-Factor Speed Arbitration Matrix -->
+        <div class="telemetry-card matrix-card">
+          <div class="card-title">Multi-Hazard Speed Arbitration</div>
+          <div class="arbitration-formula">
+            <code>v_target = min(v_base, v_pothole, v_crowd, v_weather, v_limit) &gt;= 10</code>
+          </div>
+          <div class="arbitration-table">
+            <div class="arb-row" id="row-base">
+              <span class="label">Base Cruise Speed:</span>
+              <span class="val" id="val-base">40.0 km/h</span>
+            </div>
+            <div class="arb-row" id="row-limit">
+              <span class="label">Road Speed Limit:</span>
+              <span class="val" id="val-limit">40.0 km/h</span>
+            </div>
+            <div class="arb-row" id="row-pothole">
+              <span class="label">Pothole Safety:</span>
+              <span class="val" id="val-pothole">40.0 km/h</span>
+            </div>
+            <div class="arb-row" id="row-crowd">
+              <span class="label">Crowd Safety:</span>
+              <span class="val" id="val-crowd">40.0 km/h</span>
+            </div>
+            <div class="arb-row" id="row-weather">
+              <span class="label">Weather Safety:</span>
+              <span class="val" id="val-weather">40.0 km/h</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Persistent Road Memory DB Inspector -->
+        <div class="telemetry-card memory-card">
+          <div class="card-header-flex">
+            <div class="card-title">Road Memory Database</div>
+            <button id="btn-clear-mem" class="btn-micro">Clear DB</button>
+          </div>
+          <div id="memoryList" class="memory-list">
+            <div class="empty-mem">Database empty. Run Trip 1 to record hazards.</div>
+          </div>
+        </div>
+
+        <!-- Explainable Decision Audit Trail -->
+        <div class="telemetry-card audit-card">
+          <div class="card-title">Live Decision Explainability Trail</div>
+          <div id="auditLog" class="audit-log">
+            <div class="log-entry system">[SYSTEM READY] Autonomous driving kinematic simulation online.</div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
