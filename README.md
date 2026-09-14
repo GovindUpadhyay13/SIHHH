@@ -108,3 +108,58 @@ Subject to the mandatory minimum safety limit:
 $$\text{target\_speed} \ge v_{\text{min\_safe}} = 10.0\text{ km/h}$$
 
 Every decision is accompanied by a structured explanation citing the contributing hazards.
+
+---
+
+## 4. 3D Simulation (CARLA + Python) Integration Modules
+
+Three modular, self-contained plug-ins connect into the existing decision and planning layer using a uniform integration interface:
+
+### Module 1: Pothole Detection & Cost Map (`src/perception/pothole_cost_map.py`)
+- **Showcase Scenario:** *Village Road / Unpaved Arterial* with irregular road surface damage.
+- **Mechanism:** Ingests forward camera/LiDAR stream, applies YOLOv8 / perception model, and maintains a decaying 2D spatial cost overlay.
+- **Cost Scaling:** Potholes raise traversal cost proportionally ($\text{cost} \propto \text{size} \times \text{confidence}$) rather than hard walls, naturally guiding smooth avoidance.
+- **Thresholds & Rerouting:**
+  - Decay half-life: `12.0s`
+  - Influence radius: `2.5m`
+  - Alternate route density threshold: `2.5` cost/point over a `25m` lookahead window, emitting a `suggest_alternate_route` callback.
+- **Toggle Config:** `PotholeDetectorModule(enabled=True/False)`
+
+### Module 2: Crowd-Aware Slowdown (`src/control/crowd_density_monitor.py`)
+- **Showcase Scenario:** *Dense Market / Bazaar Area* with heavy pedestrian flow and informal crossings.
+- **Mechanism:** Computes rolling density (agents per unit area over last $N=10$ frames) and maps to 4 discrete density bands:
+  - `LOW` ($< 0.25$): Normal cruise speed ($40.0$ km/h)
+  - `MEDIUM` ($0.25 - 0.55$): Speed cap $28.0$ km/h
+  - `HIGH` ($0.55 - 0.80$): Speed cap $18.0$ km/h
+  - `DENSE` ($> 0.80$): Speed cap $12.0$ km/h
+- **Persistent Zone Cache:** Saves high-density coordinates to `data/crowd_zones_cache.json` for proactive slowing on approach across consecutive runs.
+- **Toggle Config:** `CrowdDensityMonitor(enabled=True/False)`
+
+### Module 3: Weather-Aware Slowdown (`src/control/weather_response.py`)
+- **Showcase Scenario:** *Highway / Adverse Monsoon Conditions* with severe rain and reduced visibility.
+- **Mechanism:** Direct telemetry integration with CARLA's `carla.WeatherParameters` (precipitation, fog density, wetness deposits, sun altitude).
+- **Caution Levels & Speed Caps:**
+  - `CLEAR`: $40.0$ km/h, Safety Margin $1.0\times$
+  - `LIGHT_RAIN` ($\text{precip} \ge 15\%$ or $\text{wetness} \ge 30\%$): $32.0$ km/h, Safety Margin $1.3\times$
+  - `HEAVY_RAIN_OR_FOG` ($\text{precip} \ge 50\%$ or $\text{fog} \ge 35\%$): $22.0$ km/h, Safety Margin $1.7\times$
+  - `SEVERE` ($\text{precip} \ge 75\%$ or $\text{fog} \ge 70\%$): $14.0$ km/h, Safety Margin $2.2\times$
+- **Toggle Config:** `WeatherResponseModule(enabled=True/False)`
+
+---
+
+## 5. Uniform Module Integration Protocol
+
+All three modules output to the decision/planning layer with a uniform signature:
+```python
+# Planner Hook:
+cost_map, speed_cap_pothole, reroute_event = pothole_module.update(vehicle, sensor_data, lookahead_path)
+
+# Controller Hook (Speed Caps):
+speed_cap_crowd, crowd_info = crowd_module.update(vehicle, perception_data)
+speed_cap_weather, headway_mult, weather_info = weather_module.update(carla_weather)
+
+# Transparent Minimum Arbitration:
+active_caps = [c for c in [base_speed, speed_cap_pothole, speed_cap_crowd, speed_cap_weather] if c is not None]
+commanded_speed = max(10.0, min(active_caps))
+```
+
